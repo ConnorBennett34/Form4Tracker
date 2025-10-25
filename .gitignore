@@ -1,0 +1,10 @@
+# Environment Files
+backend/.env
+
+# Virtual Environment Folders/Files (Python)
+backend/venv/
+.venv/
+backend/venv/pyvenv.cfg
+
+# Node Modules (if you have a frontend/listener)
+frontend/node_modules/
