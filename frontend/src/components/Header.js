@@ -31,7 +31,7 @@ const Header = () => {
 
         setIsScanning(true);
         
-        const apiUrl = 'http://localhost:5000/api/scan-filings';
+        const apiUrl = '/api/scan-filings';
 
         try {
             const response = await fetch(apiUrl, {
@@ -63,7 +63,7 @@ const Header = () => {
 
         setIsChecking(true);
 
-        const apiUrl = 'http://localhost:5000/api/check-dates';
+        const apiUrl = '/api/check-dates';
 
         try {
             const response = await fetch(apiUrl, {
