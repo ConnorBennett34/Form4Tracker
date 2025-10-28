@@ -11,7 +11,7 @@ const TransactionDetailPage = (transaction) => {
 
     useEffect(() => {
         const loadTransactionDetails = async () => {
-            const apiUrl = `http://localhost:5000/api/transaction-details/${ticker}/${filingId}/${filingDate}`;
+            const apiUrl = `/api/transaction-details/${ticker}/${filingId}/${filingDate}`;
 
             try {
                 const response = await fetch(apiUrl, {

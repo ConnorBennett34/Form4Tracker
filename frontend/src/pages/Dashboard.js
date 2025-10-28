@@ -1,4 +1,5 @@
 import React, { use } from 'react';
+// import StyleSheet from 'react';
 import { useState, useEffect } from 'react';
 import Header from '../components/Header';
 import StatCard from '../components/StatCard';
@@ -8,8 +9,6 @@ import API_IP_Port from '../assets/tools/API_IP_Port';
 
 const API_IP_Address_Var = API_IP_AddressVariable();
 const API_IP_Port_Var = API_IP_Port();
-
-const SERVER_URL = `http://${API_IP_Address_Var}:${API_IP_Port_Var}`;
 
 const fetchFilings = async (temp_API_URL) => {
     try {
@@ -39,7 +38,7 @@ const Dashboard = () => {
     useEffect(() => {
         const loadFilings = async () => {
 
-            let temp_API_URL = SERVER_URL + '/api/get-recent-filings';
+            let temp_API_URL = '/api/get-recent-filings';
 
             const filings = await fetchFilings(temp_API_URL);
             setTransactions(filings);
