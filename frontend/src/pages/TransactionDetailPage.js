@@ -8,11 +8,9 @@ const TransactionDetailPage = () => {
     const { ticker, filingId, filingDate } = params;
 
     const [loading, setLoading] = useState(true);
-    // State to hold the fetched data
     const [transactionData, setTransactionData] = useState(null);
     
-    // State to hold any potential page-level fetch error (optional, but good practice)
-    const [fetchError, setFetchError] = useState(null); 
+    const [fetchError, setFetchError] = useState(null);
 
     useEffect(() => {
         const loadTransactionDetails = async () => {
@@ -92,7 +90,7 @@ const TransactionDetailPage = () => {
                     <div className="bg-white p-6 rounded-lg shadow-lg border border-gray-200">
                         {loading ? (
                             <p className="text-lg text-gray-700">Loading details...</p>
-                        ) : fetchError ? ( // Show fetch error if present
+                        ) : fetchError ? (
                             <p className="text-red-500">{fetchError}</p>
                         ) : transactionData ? (
                             <>

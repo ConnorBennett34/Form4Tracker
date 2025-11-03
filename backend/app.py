@@ -379,23 +379,12 @@ def insertNewStockData(transactions, stock_data):
         return {
             'successful': True,
             'message': "No Transactions needed updating"
-        }, 200 # Considered successful if nothing needed updating
+        }, 200
         
     print(f"Attempting to update {len(updates_to_perform)} transactions...\n{updates_to_perform}")
 
     
     try:
-        # Supabase Python client does not have a native 'bulk update' by ID.
-        # The most efficient approach without writing a custom RPC function is to
-        # use a bulk 'UPSERT' on the primary key, even though it's technically an update.
-        # NOTE: For this to work, you MUST include the primary key ('id') in the data.
-        
-        # We fetch the current records we need to update to get ALL existing column values.
-        # This is because UPSERT requires all NOT NULL columns to be present.
-        # A simpler, non-RPC solution is to send multiple UPDATE queries within the loop,
-        # but for a large number of updates, that's slow.
-        # The best *client-side* approach is often to iterate and use .update().eq('id', id).
-        
         success_count = 0
         for update_item in updates_to_perform:
             transaction_id = update_item['id']
@@ -446,8 +435,6 @@ def get_stale_update_jobs():
         print(f"Failed to initialize Supabase client: {e}")
         return
 
-    # Fetch all transactions (as there is no efficient way to filter for multiple OR conditions 
-    # and NULL/0 price columns directly via the client without complex PostgREST RPC)
     response = (
         supabase.table("transactions")
         .select("*")
@@ -458,9 +445,7 @@ def get_stale_update_jobs():
 
     stale_jobs = []
     
-    # Check all transactions against all defined price points
     for transaction in transactions:
-        # Defensive check against non-dictionary items, though unlikely from Supabase client
         if not isinstance(transaction, dict):
             print(f"Warning: Skipping non-dictionary item: {transaction}")
             continue
@@ -471,11 +456,7 @@ def get_stale_update_jobs():
             
             target_date_str = transaction.get(date_key)
             target_price = transaction.get(price_key)
-            
-            # Condition check:
-            # 1. Target date must exist.
-            # 2. Target date must be in the past (before today_str).
-            # 3. Corresponding price must be missing (None, 0.00, or explicitly missing).
+
             if (target_date_str and
                 target_date_str < today_str and
                 (target_price is None or target_price == 0.00)):
@@ -486,7 +467,6 @@ def get_stale_update_jobs():
                     "target_date": target_date_str,
                     "price_point_key": price_key,
                     "date_point_key": date_key,
-                    # Optional: Include other original transaction data if needed later
                     "original_transaction_data": {k: v for k, v in transaction.items() if k not in ['id', 'ticker']}
                 })
                 
@@ -503,24 +483,21 @@ def get_grouped_market_data(date: str, tickers: list):
     
     if not POLYGON_KEY:
         print("Error: Polygon API Key not set.")
-        return [] # Return empty list if key is missing
+        return []
 
     try:
         client = RESTClient(POLYGON_KEY)
 
-        # Get all aggs for the requested date
         resp = client.get_grouped_daily_aggs(
             date=date,
             adjusted=True
         )
 
-        # Create a map of ticker -> GroupedDailyAgg object
         ticker_map = {
             stock.ticker: stock
             for stock in resp
         }
         
-        # Filter the objects to only include the requested tickers
         ticker_data = [ticker_map[ticker] for ticker in tickers if ticker in ticker_map]
         
         return ticker_data
@@ -717,23 +694,18 @@ def update_stale_transactions_api():
     The main API endpoint logic. It fetches stale price points, gets market data,
     and returns the combined results for manual review/update.
     """
-    # Step 1: Get the list of price points that need updating
     all_stale_jobs = get_stale_update_jobs()
     
     if not all_stale_jobs:
         return jsonify({"status": "success", "message": "No stale price points found to update."}), 200
     
-    # Step 2: Group jobs by (target_date, ticker) to optimize Polygon API calls
     jobs_by_date_ticker = {}
 
     for job in all_stale_jobs:
         date = job['target_date']
         ticker = job['ticker']
-        # Use a tuple (date, ticker) as the key
         key = (date, ticker)
         
-        # Since we use Polygon's Grouped Daily Aggs, we can fetch all tickers for a given date at once.
-        # This grouping logic is sound.
         if date not in jobs_by_date_ticker:
             jobs_by_date_ticker[date] = {
                 'tickers': set(),
@@ -741,29 +713,23 @@ def update_stale_transactions_api():
             }
             
         jobs_by_date_ticker[date]['tickers'].add(ticker)
-        jobs_by_date_ticker[date]['jobs'].append(job) # Store the job for later re-combination
+        jobs_by_date_ticker[date]['jobs'].append(job)
         
     
-    all_market_data = {} # Key: "date_ticker" -> Value: price (open)
+    all_market_data = {}
     
-    # Step 3: Fetch market data for all unique dates (one call per date)
     unique_dates = list(jobs_by_date_ticker.keys())
     
     for date in unique_dates:
         group = jobs_by_date_ticker[date]
         tickers_to_fetch = list(group['tickers'])
         
-        # 'data' is a list of GroupedDailyAgg objects
         data = get_grouped_market_data(date, tickers_to_fetch)
 
-        # Store data using a composite key (date + ticker) for easy lookup
         for agg_object in data:
-            # FIX: Access GroupedDailyAgg properties using dot notation, not .get()
             composite_key = f"{date}_{agg_object.ticker}" 
-            # Storing the opening price for that day
             all_market_data[composite_key] = agg_object.open 
 
-    # Step 4: Combine market data back into the original job list
     transactions_for_update = []
     
     for job in all_stale_jobs:
@@ -771,15 +737,13 @@ def update_stale_transactions_api():
         ticker = job['ticker']
         composite_key = f"{date}_{ticker}"
         
-        # Market info is now just the opening price (a float or None)
         market_price = all_market_data.get(composite_key, None)
         
         transactions_for_update.append({
             "transaction_id": job['transaction_id'],
             "ticker": ticker,
-            "update_field": job['price_point_key'], # The specific column to update in Supabase
+            "update_field": job['price_point_key'],
             "target_date": date,
-            # We store the price directly here, not the full object
             "market_data_price": market_price, 
             "ready_to_update": market_price is not None 
         })
@@ -814,6 +778,6 @@ if __name__ == '__main__':
     )
     
     scheduler.start()
-    print("Scheduler started: Daily filing scan set for 00:00 UTC, and observation date check set for 01:00 UTC.")
+    print("Scheduler started: Daily filing scan set for 05:00 UTC, and observation date check set for 05:30 UTC.")
 
     app.run(debug=True, port=5000, use_reloader=False)

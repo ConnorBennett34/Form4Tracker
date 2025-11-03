@@ -82,24 +82,21 @@ const Dashboard = () => {
         setFilteredTransactionsType(stat.id === 'total' ? '' : stat.id);
     };
 
-    // Determine which array of transactions to display based on the filter
     const allTransactionsToShow = (() => {
         switch (filteredTransactionsType) {
             case 'buys':
                 return purchases;
             case 'sales':
                 return sales;
-            case '': // Total trades
+            case '':
             default:
                 return transactions;
         }
     })();
     
-    // Calculate pagination values
     const totalTransactions = allTransactionsToShow.length;
     const totalPages = Math.ceil(totalTransactions / TRANSACTIONS_PER_PAGE);
 
-    // Get the transactions for the current page using slice
     const startIndex = (currentPage - 1) * TRANSACTIONS_PER_PAGE;
     const endIndex = startIndex + TRANSACTIONS_PER_PAGE;
     const currentTransactions = allTransactionsToShow.slice(startIndex, endIndex);
