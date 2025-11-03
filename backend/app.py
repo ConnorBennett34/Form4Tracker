@@ -8,6 +8,7 @@ from supabase import create_client, Client
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 from flask_cors import CORS
+from polygon import RESTClient
 
 # ----------------------------------------
 # 1. INITIALIZATION & CONFIG
@@ -22,8 +23,22 @@ CORS(app)
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 SEC_USER_AGENT = os.environ.get("SEC_USER_AGENT")
+POLYGON_KEY = os.environ.get("POLYGON_KEY")
 
 RATE_LIMIT_DELAY_MS = 150
+
+PRICE_POINT_KEYS = [
+    {'dateKey': 'day1date', 'priceKey': 'day1price'},
+    {'dateKey': 'day2date', 'priceKey': 'day2price'},
+    {'dateKey': 'day3date', 'priceKey': 'day3price'},
+    {'dateKey': 'week1date', 'priceKey': 'week1price'},
+    {'dateKey': 'week2date', 'priceKey': 'week2price'},
+    {'dateKey': 'week3date', 'priceKey': 'week3price'},
+    {'dateKey': 'month1date', 'priceKey': 'month1price'},
+    {'dateKey': 'month3date', 'priceKey': 'month3price'},
+    {'dateKey': 'month6date', 'priceKey': 'month6price'},
+    {'dateKey': 'year1date', 'priceKey': 'year1price'},
+]
 
 # ----------------------------------------
 # 2. UTILITY FUNCTIONS
@@ -201,11 +216,6 @@ def check_observation_dates():
         matched_transactions = response.data
         
         if matched_transactions:
-            print(f"Found {len(matched_transactions)} transactions needing a price observation today.")
-
-            for tx in matched_transactions:
-                print(f" - READY: Ticker: {tx['ticker']}, Filing ID: {tx['filing_id']}")
-
             return matched_transactions
             
         else:
@@ -244,6 +254,280 @@ def get_transaction_details(ticker, filingId, filingDate):
             
     except Exception as e:
         print(f"Failed to query transactions table: {e}")
+
+def get_grouped_stock_data(tickers):
+    """
+    Fetches daily OHLCV data for ALL tickers and filters it down to a list.
+    """
+
+    if not POLYGON_KEY:
+        return {"error": "API Key not loaded."}
+
+    target_date_obj = datetime.now().date() - timedelta(days=1)
+    target_date_str = str(target_date_obj)
+    
+    ticker_data = []
+    
+    print(f"Fetching grouped daily data for {target_date_str}...")
+
+    client = None
+
+    try:
+        client = RESTClient(POLYGON_KEY)
+
+        resp = client.get_grouped_daily_aggs(
+            date=target_date_str,
+            adjusted=True
+        )
+
+        ticker_map = {
+            stock.ticker: stock
+            for stock in resp
+        }
+
+        for ticker in tickers:
+            if ticker in ticker_map:
+                ticker_data.append(ticker_map[ticker])
+            else:
+                print(f"No data found for {ticker}")
+
+        return ticker_data
+        
+    except Exception as e:
+        if "rate limit" in str(e).lower():
+            print("Rate limit hit. Waiting 5 seconds and retrying...")
+            time.sleep(5)
+            return get_grouped_stock_data()
+            
+        return {"error": f"An unexpected error occurred: {e}"}
+        
+def insertNewStockData(transactions, stock_data):
+    """
+    Updates the transaction price columns in the Supabase database
+    based on the current stock market data.
+    Returns True if all updates were successful, False otherwise.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("Supabase credentials are not set.")
+        return
+
+    try:
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"Failed to initialize Supabase client: {e}")
+        return
+
+    new_data = {}
+    for item in stock_data:
+        dt_object = datetime.fromtimestamp(item.timestamp / 1000).date()
+        
+        new_data[(item.ticker, dt_object)] = {
+            'price': item.vwap
+        }
+
+    if not stock_data:
+        print("Error: stock_data array is empty.")
+        return
+    
+    current_date = datetime.fromtimestamp(stock_data[0].timestamp / 1000).date()
+    
+    DATE_TO_PRICE_COL = {
+        'day1date': 'day1price',
+        'day2date': 'day2price',
+        'day3date': 'day3price',
+        'week1date': 'week1price',
+        'week2date': 'week2price',
+        'week3date': 'week3price',
+        'month1date': 'month1price',
+        'month3date': 'month3price',
+        'month6date': 'month6price',
+        'year1date': 'year1price',
+    }
+
+    updates_to_perform = []
+    
+    for transaction in transactions:
+        ticker = transaction.get('ticker')
+        transaction_id = transaction.get('id')
+        
+        update_column = None
+        
+        for date_col, price_col in DATE_TO_PRICE_COL.items():
+            transaction_date_str = transaction.get(date_col)
+            
+            if transaction_date_str:
+                transaction_date_obj = datetime.strptime(transaction_date_str, '%Y-%m-%d').date()
+                
+                if transaction_date_obj == current_date:
+                    update_column = price_col
+                    break
+
+        if update_column:
+            key = (ticker, current_date)
+            if key in new_data:
+                new_price = new_data[key]['price']
+                
+                updates_to_perform.append({
+                    'id': transaction_id,
+                    update_column: new_price
+                })
+            else:
+                print(f"Warning: Stock data for ticker {ticker} on {current_date} not found.")
+
+    if not updates_to_perform:
+        print("No transactions found that need updating for the current date.")
+        return {
+            'successful': True,
+            'message': "No Transactions needed updating"
+        }, 200 # Considered successful if nothing needed updating
+        
+    print(f"Attempting to update {len(updates_to_perform)} transactions...\n{updates_to_perform}")
+
+    
+    try:
+        # Supabase Python client does not have a native 'bulk update' by ID.
+        # The most efficient approach without writing a custom RPC function is to
+        # use a bulk 'UPSERT' on the primary key, even though it's technically an update.
+        # NOTE: For this to work, you MUST include the primary key ('id') in the data.
+        
+        # We fetch the current records we need to update to get ALL existing column values.
+        # This is because UPSERT requires all NOT NULL columns to be present.
+        # A simpler, non-RPC solution is to send multiple UPDATE queries within the loop,
+        # but for a large number of updates, that's slow.
+        # The best *client-side* approach is often to iterate and use .update().eq('id', id).
+        
+        success_count = 0
+        for update_item in updates_to_perform:
+            transaction_id = update_item['id']
+            data_to_update = {k: v for k, v in update_item.items() if k != 'id'}
+            
+            response = (
+                supabase.table("transactions")
+                .update(data_to_update)
+                .eq("id", transaction_id)
+                .execute()
+            )
+            
+            if not response.data or 'error' in response.data:
+                print(f"Failed to update ID {transaction_id}: {response.data}")
+            else:
+                success_count += 1
+
+        print(f"Successfully updated {success_count} transactions out of {len(updates_to_perform)} attempts.")
+        return jsonify({
+            'successful': True,
+            'updates': updates_to_perform
+        }), 200
+        
+    except Exception as e:
+        print(f"Supabase update failed with an error: {e}")
+        return {
+            'successful': False,
+            'message': f"Supabase update failed: {e}"
+        }, 500
+    
+
+
+def get_stale_update_jobs():
+    """
+    Function to retrieve all transactions where any monitored date field is in the 
+    past AND the corresponding price field is missing/null/zero.
+    """
+    print("--- 1. Identifying Stale Price Points/Update Jobs in Supabase ---")
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("Supabase credentials are not set.")
+        return
+
+    try:
+        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"Failed to initialize Supabase client: {e}")
+        return
+
+    # Fetch all transactions (as there is no efficient way to filter for multiple OR conditions 
+    # and NULL/0 price columns directly via the client without complex PostgREST RPC)
+    response = (
+        supabase.table("transactions")
+        .select("*")
+        .execute()
+    )
+
+    transactions = response.data
+
+    stale_jobs = []
+    
+    # Check all transactions against all defined price points
+    for transaction in transactions:
+        # Defensive check against non-dictionary items, though unlikely from Supabase client
+        if not isinstance(transaction, dict):
+            print(f"Warning: Skipping non-dictionary item: {transaction}")
+            continue
+
+        for point in PRICE_POINT_KEYS:
+            date_key = point['dateKey']
+            price_key = point['priceKey']
+            
+            target_date_str = transaction.get(date_key)
+            target_price = transaction.get(price_key)
+            
+            # Condition check:
+            # 1. Target date must exist.
+            # 2. Target date must be in the past (before today_str).
+            # 3. Corresponding price must be missing (None, 0.00, or explicitly missing).
+            if (target_date_str and
+                target_date_str < today_str and
+                (target_price is None or target_price == 0.00)):
+                
+                stale_jobs.append({
+                    "transaction_id": transaction['id'],
+                    "ticker": transaction['ticker'],
+                    "target_date": target_date_str,
+                    "price_point_key": price_key,
+                    "date_point_key": date_key,
+                    # Optional: Include other original transaction data if needed later
+                    "original_transaction_data": {k: v for k, v in transaction.items() if k not in ['id', 'ticker']}
+                })
+                
+    print(f"Identified {len(stale_jobs)} price points requiring update.")
+    return stale_jobs
+
+
+def get_grouped_market_data(date: str, tickers: list):
+    """
+    Calls the Polygon.io Grouped Daily API for a specific date and a list of tickers.
+    Returns a list of GroupedDailyAgg objects.
+    """
+    print(f"--- 2. Fetching Polygon data for date: {date}, ticker(s): {tickers} ---")
+    
+    if not POLYGON_KEY:
+        print("Error: Polygon API Key not set.")
+        return [] # Return empty list if key is missing
+
+    try:
+        client = RESTClient(POLYGON_KEY)
+
+        # Get all aggs for the requested date
+        resp = client.get_grouped_daily_aggs(
+            date=date,
+            adjusted=True
+        )
+
+        # Create a map of ticker -> GroupedDailyAgg object
+        ticker_map = {
+            stock.ticker: stock
+            for stock in resp
+        }
+        
+        # Filter the objects to only include the requested tickers
+        ticker_data = [ticker_map[ticker] for ticker in tickers if ticker in ticker_map]
+        
+        return ticker_data
+    except Exception as e:
+        print(f"Error fetching Polygon data for {date}: {e}")
+        return []
+
 
 # ----------------------------------------
 # 3. FLASK ROUTES
@@ -388,14 +672,31 @@ def check_dates():
     """
     try:
         transactions = check_observation_dates()
+
+        if transactions and len(transactions) > 0:
+
+            tickers = []
+
+            for transaction in transactions:
+                tickers.append(transaction['ticker'])
+
+            stock_data = get_grouped_stock_data(tickers)
+
+            result = insertNewStockData(transactions, stock_data)
+            
+            return result
         
         return jsonify({
-            'success': True,
-            'transactions': transactions
-        }), 200
+            'message': 'No stocks that have dates needing to be checked.'
+        })
 
     except Exception as error:
         print(f"Critical Error in check-dates function: {error}")
+
+        return jsonify({
+            "status": "Internal Server Error",
+            "message": f"An error occurred: {str(error)}"
+        }), 500
 
 @app.route('/api/transaction-details/<ticker>/<filingId>/<filingDate>', methods=['GET'])
 def transaction_details(ticker, filingId, filingDate):
@@ -410,19 +711,109 @@ def transaction_details(ticker, filingId, filingDate):
     except Exception as error:
         print(f"Critical Error in transaction-details function: {error}")
 
+@app.route('/api/check-earlier-dates', methods=['GET'])
+def update_stale_transactions_api():
+    """
+    The main API endpoint logic. It fetches stale price points, gets market data,
+    and returns the combined results for manual review/update.
+    """
+    # Step 1: Get the list of price points that need updating
+    all_stale_jobs = get_stale_update_jobs()
+    
+    if not all_stale_jobs:
+        return jsonify({"status": "success", "message": "No stale price points found to update."}), 200
+    
+    # Step 2: Group jobs by (target_date, ticker) to optimize Polygon API calls
+    jobs_by_date_ticker = {}
+
+    for job in all_stale_jobs:
+        date = job['target_date']
+        ticker = job['ticker']
+        # Use a tuple (date, ticker) as the key
+        key = (date, ticker)
+        
+        # Since we use Polygon's Grouped Daily Aggs, we can fetch all tickers for a given date at once.
+        # This grouping logic is sound.
+        if date not in jobs_by_date_ticker:
+            jobs_by_date_ticker[date] = {
+                'tickers': set(),
+                'jobs': []
+            }
+            
+        jobs_by_date_ticker[date]['tickers'].add(ticker)
+        jobs_by_date_ticker[date]['jobs'].append(job) # Store the job for later re-combination
+        
+    
+    all_market_data = {} # Key: "date_ticker" -> Value: price (open)
+    
+    # Step 3: Fetch market data for all unique dates (one call per date)
+    unique_dates = list(jobs_by_date_ticker.keys())
+    
+    for date in unique_dates:
+        group = jobs_by_date_ticker[date]
+        tickers_to_fetch = list(group['tickers'])
+        
+        # 'data' is a list of GroupedDailyAgg objects
+        data = get_grouped_market_data(date, tickers_to_fetch)
+
+        # Store data using a composite key (date + ticker) for easy lookup
+        for agg_object in data:
+            # FIX: Access GroupedDailyAgg properties using dot notation, not .get()
+            composite_key = f"{date}_{agg_object.ticker}" 
+            # Storing the opening price for that day
+            all_market_data[composite_key] = agg_object.open 
+
+    # Step 4: Combine market data back into the original job list
+    transactions_for_update = []
+    
+    for job in all_stale_jobs:
+        date = job['target_date']
+        ticker = job['ticker']
+        composite_key = f"{date}_{ticker}"
+        
+        # Market info is now just the opening price (a float or None)
+        market_price = all_market_data.get(composite_key, None)
+        
+        transactions_for_update.append({
+            "transaction_id": job['transaction_id'],
+            "ticker": ticker,
+            "update_field": job['price_point_key'], # The specific column to update in Supabase
+            "target_date": date,
+            # We store the price directly here, not the full object
+            "market_data_price": market_price, 
+            "ready_to_update": market_price is not None 
+        })
+
+    print("--- 4. Combining and Returning Results ---")
+    return jsonify({
+        "status": "success",
+        "count_jobs_found": len(transactions_for_update),
+        "unique_polygon_calls_made": len(jobs_by_date_ticker),
+        "transactions_for_update": transactions_for_update
+    }), 200
+
 if __name__ == '__main__':
     scheduler = BackgroundScheduler()
 
     scheduler.add_job(
-        func=check_observation_dates,
+        func=scan_filings,
         trigger='cron',
-        hour=1,
+        hour=5,
         minute=0,
+        timezone='UTC',
+        id='daily_filing_scan'
+    )
+
+    scheduler.add_job(
+        func=check_dates,
+        trigger='cron',
+        hour=5,
+        minute=30,
         timezone='UTC',
         id='daily_observation_check'
     )
     
     scheduler.start()
-    print("Scheduler started: Daily observation date check set for 01:00 UTC.")
+    print("Scheduler started: Daily filing scan set for 00:00 UTC, and observation date check set for 01:00 UTC.")
 
     app.run(debug=True, port=5000, use_reloader=False)

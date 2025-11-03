@@ -2,3 +2,6 @@ Flask
 requests
 python-dotenv
 supabase
+flask_cors
+apscheduler
+polygon-api-client

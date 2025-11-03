@@ -7,8 +7,10 @@ const TransactionRow = ({ transaction }) => {
 
     const [isHovered, setIsHovered] = useState(false);
 
+    // Handling date formatting
     const transactionDate = new Date(transaction.filing_date);
-    const transactionDateString = transactionDate.toLocaleDateString('en-US', transactionDate);
+    // Use an options object for reliable date string formatting
+    const transactionDateString = transactionDate.toLocaleDateString('en-US', { year: 'numeric', month: 'numeric', day: 'numeric' });
 
     const ticker = transaction.ticker || 'N/A';
     const filingId = transaction.filing_id || 'N/A';
@@ -42,7 +44,8 @@ const TransactionRow = ({ transaction }) => {
 
     const handleRowClick = () => {
         const path = `/transaction/${ticker}/${filingId}/${filingDate}`;
-        navigate(path);
+        // The path will need to be handled by the router outside this component
+        navigate(path); 
     };
 
     return (
@@ -60,7 +63,7 @@ const TransactionRow = ({ transaction }) => {
         </td>
         <td style={cellStyle}>{ticker}</td>
         <td style={cellStyle}>{shares.toLocaleString()}</td>
-        <td style={cellStyle}>{price}</td>
+        <td style={cellStyle}>${!isNaN(parseFloat(price)) ? parseFloat(price).toFixed(2) : price}</td>
         <td style={cellStyle}>{transactionDateString}</td>
         </tr>
     );

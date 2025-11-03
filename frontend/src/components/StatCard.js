@@ -4,7 +4,7 @@ import React from 'react';
 import { useState, useEffect } from 'react';
 
 const StatCard = ({ title, value, color, isPurchase, isSale }) => {
-    const [isHovered, setIsHovered] = useState(false);
+    const [isStatCardHovered, setIsStatCardHovered] = useState(false);
 
     const iconStyle = {
         color: isPurchase ? '#38C172' : isSale ? '#E3342F' : 'white',
@@ -12,7 +12,7 @@ const StatCard = ({ title, value, color, isPurchase, isSale }) => {
     };
 
     const statCardStyle = {
-        backgroundColor: isHovered ? 'transparent': '#3A3E46',
+        backgroundColor: isStatCardHovered ? 'transparent': '#3A3E46',
         flex: 1,
         borderRadius: '8px',
         padding: '20px',
@@ -24,9 +24,10 @@ const StatCard = ({ title, value, color, isPurchase, isSale }) => {
     };
 
     return (
+        // --- Stat Card Section ---
         <div style={statCardStyle}
-            onMouseEnter={() => setIsHovered(true)}
-            onMouseLeave={() => setIsHovered(false)}
+            onMouseEnter={() => setIsStatCardHovered(true)}
+            onMouseLeave={() => setIsStatCardHovered(false)}
         >
             <div>
                 <p style={{ margin: 0, fontSize: '14px', color: '#B0B0B0' }}>{title}</p>

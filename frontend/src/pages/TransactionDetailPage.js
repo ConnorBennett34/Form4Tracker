@@ -3,11 +3,16 @@ import { useParams, Link } from 'react-router-dom';
 import Header from '../components/Header';
 import StockChart from '../components/StockChart';
 
-const TransactionDetailPage = (transaction) => {
+const TransactionDetailPage = () => {
     const params = useParams();
     const { ticker, filingId, filingDate } = params;
 
     const [loading, setLoading] = useState(true);
+    // State to hold the fetched data
+    const [transactionData, setTransactionData] = useState(null);
+    
+    // State to hold any potential page-level fetch error (optional, but good practice)
+    const [fetchError, setFetchError] = useState(null); 
 
     useEffect(() => {
         const loadTransactionDetails = async () => {
@@ -24,18 +29,19 @@ const TransactionDetailPage = (transaction) => {
                 }
 
                 const data = await response.json();
-                console.log('Loading Transaction Details successful:', data);
+                
+                setTransactionData(data.transaction); 
+                setFetchError(null);
             } catch (error) {
-                console.error('Loading Transaction Details failed:', error.message);
-                alert(`Loading Transaction Details failed: ${error.message}`);
+                setFetchError(`Loading Transaction Details failed: ${error.message}`);
+                setTransactionData(null);
             } finally {
                 setLoading(false);
             }
-
         }
 
         loadTransactionDetails();
-    }, []);
+    }, [ticker, filingId, filingDate]);
 
     const transactionDetailsPageStyles = {
         backgroundColor: 'rgb(47, 51, 60)',
@@ -62,6 +68,7 @@ const TransactionDetailPage = (transaction) => {
         color: 'white',
         marginRight: '1%',
         marginLeft: '1%',
+
     };
 
     return (
@@ -75,23 +82,28 @@ const TransactionDetailPage = (transaction) => {
                 {/* Transaction Details Section */}
                 <div style={detailsDivStyles}>
                     <h1 className="text-3xl font-bold mb-2 text-gray-800">
-                        Transaction Details: {ticker}
+                        Transaction Details:
                     </h1>
+                    <h3>
+                        {ticker} - {transactionData ? transactionData.transaction_code === "S" ? "Sale" : "Buy" : null}
+                    </h3>
                     <p className="text-gray-600 mb-6">Filing ID: <span className="font-mono">{filingId}</span></p>
 
                     <div className="bg-white p-6 rounded-lg shadow-lg border border-gray-200">
                         {loading ? (
-                            <p className="text-lg">Loading details...</p>
-                        ) : transaction ? (
+                            <p className="text-lg text-gray-700">Loading details...</p>
+                        ) : fetchError ? ( // Show fetch error if present
+                            <p className="text-red-500">{fetchError}</p>
+                        ) : transactionData ? (
                             <>
-                                <div className="mb-4">
-                                    <h2 className="text-xl font-semibold text-gray-700">Date</h2>
-                                    <p className="text-lg">{transaction.filing_date}</p>
+                                <div className="mb-4 text-gray-700">
+                                    <h3 className="text-xl font-semibold">Date</h3>
+                                    <p className="text-lg">{transactionData.filing_date}</p>
                                 </div>
 
-                                <div className="mb-4">
-                                    <h2 className="text-xl font-semibold text-gray-700">Filing Accession Number</h2>
-                                    <p className="text-lg break-all">{transaction.filing_id}</p>
+                                <div className="mb-4 text-gray-700">
+                                    <h3 className="text-xl font-semibold">Filing Accession Number</h3>
+                                    <p className="text-lg break-all">{transactionData.filing_id}</p>
                                 </div>
                             </>
                         ) : (
@@ -116,11 +128,10 @@ const TransactionDetailPage = (transaction) => {
                     <p>Transaction prices over different time periods</p>
 
                     <div style={{ height: '350px', border: '1px solid #444', marginTop: '20px', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                        <StockChart />
+                        <StockChart transactionData={transactionData} isLoading={loading} />
                     </div>
                 </div>
             </div>
-            
         </div>
     );
 };
