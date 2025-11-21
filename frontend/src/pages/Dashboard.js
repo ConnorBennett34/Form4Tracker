@@ -26,9 +26,8 @@ const fetchFilings = async (temp_API_URL) => {
     return data.filings;
 
     } catch (error) {
-        // Removed alert and used console.error for non-breaking error handling
         console.error('Error during filings fetching:', error.message);
-        return []; // Return empty array on error
+        return [];
     }
 }
 
@@ -47,10 +46,6 @@ const Dashboard = () => {
         width: '30%',
         justifyContent: 'space-between',
     };
-
-    useEffect(() => {
-        console.log("Transactions: ", transactions);
-    }, [transactions]);
 
     useEffect(() => {
         const loadFilings = async () => {
