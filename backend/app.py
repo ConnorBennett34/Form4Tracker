@@ -727,8 +727,8 @@ def update_stale_transactions_api():
         data = get_grouped_market_data(date, tickers_to_fetch)
 
         for agg_object in data:
-            composite_key = f"{date}_{agg_object.ticker}"
-            all_market_data[composite_key] = agg_object.open
+            composite_key = f"{date}_{agg_object.ticker}" 
+            all_market_data[composite_key] = agg_object.open 
 
     transactions_for_update = []
     
@@ -744,8 +744,8 @@ def update_stale_transactions_api():
             "ticker": ticker,
             "update_field": job['price_point_key'],
             "target_date": date,
-            "market_data_price": market_price,
-            "ready_to_update": market_price is not None
+            "market_data_price": market_price, 
+            "ready_to_update": market_price is not None 
         })
 
     print("--- 4. Combining and Returning Results ---")
@@ -755,35 +755,13 @@ def update_stale_transactions_api():
         "unique_polygon_calls_made": len(jobs_by_date_ticker),
         "transactions_for_update": transactions_for_update
     }), 200
-# ----------------------------------------
-# 4. SCHEDULER HELPER FUNCTION
-# ----------------------------------------
-
-def schedule_job_with_context(func):
-    """
-    Helper function to wrap a Flask route function so it can be run by APScheduler.
-    """
-    def wrapper():
-        with app.app_context():
-            try:
-                func()
-            except Exception as e:
-                print(f"Error running scheduled job {func.__name__}: {e}")
-                
-    wrapper.__name__ = f"context_wrapper_for_{func.__name__}"
-    return wrapper
-
-# ----------------------------------------
-# 5. EXECUTION
-# ----------------------------------------
 
 if __name__ == '__main__':
     scheduler = BackgroundScheduler()
 
     scheduler.add_job(
-        func=schedule_job_with_context(scan_filings),
+        func=scan_filings,
         trigger='cron',
-        day_of_week='1-5',
         hour=5,
         minute=0,
         timezone='UTC',
@@ -791,9 +769,8 @@ if __name__ == '__main__':
     )
 
     scheduler.add_job(
-        func=schedule_job_with_context(check_dates),
+        func=check_dates,
         trigger='cron',
-        day_of_week='1-5',
         hour=5,
         minute=30,
         timezone='UTC',
@@ -801,6 +778,6 @@ if __name__ == '__main__':
     )
     
     scheduler.start()
-    print("Scheduler started: Filing scan set for 05:00 UTC, and observation date check set for 05:30 UTC on Tue-Sat.")
+    print("Scheduler started: Daily filing scan set for 05:00 UTC, and observation date check set for 05:30 UTC.")
 
     app.run(debug=True, port=5000, use_reloader=False)
